@@ -22,11 +22,9 @@ on:
       ssh-private-key:
         description: "Clave privada SSH"
         required: true
-        type: string
       env-file-content:
         description: ".env completo"
         required: true
-        type: string
 
 jobs:
   deploy:
