@@ -18,6 +18,7 @@ on:
         description: 'Files to include in deployment (space separated)'
         required: false
         default: 'src/ migrations/ seeders/ index.ts app.ts drizzle.config.prod.ts package.json tsconfig.json Dockerfile docker-compose.yml'
+        type: string
     secrets:
       ssh-private-key:
         description: "Clave privada SSH"
