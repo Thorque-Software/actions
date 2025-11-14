@@ -10,7 +10,7 @@ on:
         required: false
         type: string
         default: "ubuntu"
-      deploy_path:
+      deploy-path:
         description: "Ruta remota donde se va a subir el backend"
         required: true
         type: string
@@ -37,7 +37,7 @@ jobs:
 
       - name: Setup SSH private key
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.ssh_private_key }}
+          SSH_PRIVATE_KEY: ${{ secrets.ssh-private-key }}
           SSH_AUTH_SOCK: /tmp/ssh_agent.sock
         run: |
           ssh-agent -a $SSH_AUTH_SOCK > /dev/null
@@ -67,7 +67,7 @@ jobs:
 
       - name: Upload environment file
         env:
-          ENV_CONTENT: ${{ inputs.env-file-content }}
+          ENV_CONTENT: ${{ secrets.env-file-content }}
         run: |
           ssh -o StrictHostKeyChecking=no ${{ inputs.server-ip }}
             echo '$ENV_CONTENT' > ${{ inputs.deploy-path }}/.env
