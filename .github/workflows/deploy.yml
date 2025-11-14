@@ -27,6 +27,9 @@ on:
         description: ".env completo"
         required: true
 
+env:
+  SSH_AUTH_SOCK: /tmp/ssh_agent.sock
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -38,7 +41,6 @@ jobs:
       - name: Setup SSH private key
         env:
           SSH_PRIVATE_KEY: ${{ secrets.ssh-private-key }}
-          SSH_AUTH_SOCK: /tmp/ssh_agent.sock
         run: |
           ssh-agent -a $SSH_AUTH_SOCK > /dev/null
           echo "$SSH_PRIVATE_KEY" | ssh-add - >/dev/null
