@@ -1,0 +1,110 @@
+name: 'Docker Deploy'
+description: 'Deploy application to server using Docker Compose'
+inputs:
+  ssh-private-key:
+    description: 'SSH private key for server access'
+    required: true
+  server-host:
+    description: 'Server host (user@host)'
+    required: true
+  deploy-path:
+    description: 'Deployment path on server'
+    required: true
+  env-file-content:
+    description: 'Content for .env file'
+    required: true
+  deployment-files:
+    description: 'Files to include in deployment (space separated)'
+    required: false
+    default: 'src/ migrations/ seeders/ index.ts app.ts drizzle.config.prod.ts package.json tsconfig.json Dockerfile docker-compose.yml'
+
+runs:
+  using: "composite"
+  steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup SSH
+      shell: bash
+      env:
+        SSH_PRIVATE_KEY: ${{ inputs.ssh-private-key }}
+      run: |
+        mkdir -p ~/.ssh
+        echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        ssh-keyscan -H ${inputs.server-host#*@} >> ~/.ssh/known_hosts
+
+    - name: Create deployment package
+      shell: bash
+      run: |
+        mkdir -p deployment
+        # Copiar archivos especificados
+        for file in ${{ inputs.deployment-files }}; do
+          if [ -e "$file" ]; then
+            cp -r "$file" deployment/
+          else
+            echo "Warning: $file not found"
+          fi
+        done
+        
+        tar -czf deployment.tar.gz deployment/
+        echo "Deployment package created"
+
+    - name: Prepare server directory
+      run: |
+        ssh -o StrictHostKeyChecking=no ${{ inputs.server-host }} << ENDSSH
+          mkdir -p ${{ inputs.deploy-path }}
+          rm -rf ${{ inputs.deploy-path }}/*
+          ENDSSH
+
+    - name: Upload environment file
+      env:
+        ENV_CONTENT: ${{ inputs.env-file-content }}
+      run: |
+        ssh -o StrictHostKeyChecking=no ${{ inputs.server-host }}
+          echo '$ENV_CONTENT' > ${{ inputs.deploy-path }}/.env
+
+    - name: Upload deployment package
+      run: |
+        scp -o StrictHostKeyChecking=no deployment.tar.gz ${{ inputs.server-host }}:${{ inputs.deploy-path }}
+
+    - name: Deploy with Docker
+      shell: bash
+      run: |
+        ssh -o StrictHostKeyChecking=no ${{ inputs.server-host }} >> ENDSSH
+          cd ${{ inputs.deploy-path }}
+          tar -xzf deployment.tar.gz --strip-components=1
+          rm -f deployment.tar.gz
+
+          docker compose down
+          docker compose build
+          
+          if [ '${{ inputs.run-migrations }}' = 'true' ]; then
+            ${{ inputs.migration-command }}
+          fi
+          
+          docker compose up --remove-orphans -d
+          ENDSSH
+
+    - name: Health Check
+      env:
+        HEALTHCHECK_URL: ${{ inputs.server-host }}/api/v1/eso
+        EXPECTED_BODY: brad
+      run: |
+        for i in {1..10}; do
+          status_code=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTHCHECK_URL")
+          body=$(curl -s "$HEALTHCHECK_URL")
+
+          if [ "$status_code" = "200" ]; then
+            if [ -z "$EXPECTED_BODY" ] || [ "$body" = "$EXPECTED_BODY" ]; then
+              echo "✅ Server is up and returning expected response!"
+              exit 0
+            fi
+          fi
+          
+          echo "⏳ Attempt $i: Server not ready yet (Status: $status_code), waiting 5 seconds..."
+          sleep 5
+        done
+        
+        echo "❌ Server did not return expected response in time"
+        exit 1
