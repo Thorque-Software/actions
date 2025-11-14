@@ -60,10 +60,10 @@ jobs:
 
       - name: Prepare server directory
         run: |
-          ssh -o StrictHostKeyChecking=no ${{ inputs.server-user }}@${{ inputs.server-ip }} << ENDSSH
-            mkdir -p ${{ inputs.deploy-path }}
-            rm -rf ${{ inputs.deploy-path }}/*
-            ENDSSH
+          ssh -o StrictHostKeyChecking=no ${{ inputs.server-user }}@${{ inputs.server-ip }} << 'ENDSSH'
+          mkdir -p ${{ inputs.deploy-path }}
+          rm -rf ${{ inputs.deploy-path }}/*
+          ENDSSH
 
       - name: Upload environment file
         env:
@@ -73,25 +73,24 @@ jobs:
             echo '$ENV_CONTENT' > ${{ inputs.deploy-path }}/.env
 
       - name: Upload deployment package
-        run: |
-          scp -o StrictHostKeyChecking=no deployment.tar.gz ${{ inputs.server-user }}@${{ inputs.server-ip }}:${{ inputs.deploy-path }}
+        run: scp -o StrictHostKeyChecking=no deployment.tar.gz ${{ inputs.server-user }}@${{ inputs.server-ip }}:${{ inputs.deploy-path }}
 
       - name: Deploy with Docker
         run: |
-          ssh -o StrictHostKeyChecking=no ${{ inputs.server-ip }} << ENDSSH
-            cd ${{ inputs.deploy-path }}
-            tar -xzf deployment.tar.gz --strip-components=1
-            rm -f deployment.tar.gz
+          ssh -o StrictHostKeyChecking=no ${{ inputs.server-ip }} << 'ENDSSH'
+          cd ${{ inputs.deploy-path }}
+          tar -xzf deployment.tar.gz --strip-components=1
+          rm -f deployment.tar.gz
 
-            docker compose down
-            docker compose build
-            
-            if [ '${{ inputs.run-migrations }}' = 'true' ]; then
-              ${{ inputs.migration-command }}
-            fi
-            
-            docker compose up --remove-orphans -d
-            ENDSSH
+          docker compose down
+          docker compose build
+          
+          if [ '${{ inputs.run-migrations }}' = 'true' ]; then
+            ${{ inputs.migration-command }}
+          fi
+          
+          docker compose up --remove-orphans -d
+          ENDSSH
 
       - name: Health Check
         env:
