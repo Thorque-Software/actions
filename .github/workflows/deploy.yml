@@ -75,7 +75,7 @@ jobs:
 
       - name: Deploy with Docker
         run: |
-          ssh -o StrictHostKeyChecking=no ${{ inputs.server-ip }} "\
+          ssh -o StrictHostKeyChecking=no ${{ inputs.server-user }}@${{ inputs.server-ip }} "\
             cd ${{ inputs.deploy-path }} && \
             tar -xzf deployment.tar.gz --strip-components=1
             rm -f deployment.tar.gz
