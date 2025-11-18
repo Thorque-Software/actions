@@ -5,6 +5,11 @@ on:
         description: "IP publica del servidor"
         required: true
         type: string
+      healthcheck-endpoint: 
+        description: "Healthcheck endpoint route of the server (eg: 'api/v1/eso')"
+        required: false
+        type: string
+        default: "api/v1/eso"
       server-user:
         description: "SSH host (user@ip)"
         required: false
@@ -91,7 +96,7 @@ jobs:
     steps:
       - name: Health Check
         env:
-          HEALTHCHECK_URL: ${{ inputs.server-ip }}/api/v1/eso
+          HEALTHCHECK_URL: ${{ inputs.server-ip }}/${{ inputs.healthcheck_endpoint }}
           EXPECTED_BODY: brad
         run: |
           for i in {1..10}; do
