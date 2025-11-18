@@ -96,7 +96,7 @@ jobs:
     steps:
       - name: Health Check
         env:
-          HEALTHCHECK_URL: ${{ inputs.server-ip }}/${{ inputs.healthcheck_endpoint }}
+          HEALTHCHECK_URL: ${{ inputs.server-ip }}/${{ inputs.healthcheck-endpoint }}
           EXPECTED_BODY: brad
         run: |
           for i in {1..10}; do
