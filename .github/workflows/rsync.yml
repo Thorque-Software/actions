@@ -103,6 +103,5 @@ jobs:
               cd ${{ inputs.deploy-path }} && \
               echo '${{ secrets.env-file-content }}' > .env && \
               bash /tmp/post_deploy.sh &&  \
-              rm /tmp/post_deploy.sh && \
-              rm '$TEMP_SCRIPT'
+              rm /tmp/post_deploy.sh
           "
