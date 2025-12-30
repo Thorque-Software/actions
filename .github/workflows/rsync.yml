@@ -11,10 +11,6 @@ on:
         description: "Server SSH user"
         required: true
         type: string
-      key:
-        description: "Private SSH key"
-        required: true
-        type: string
       deploy-path:
         description: "Remote server path"
         required: true
@@ -32,6 +28,15 @@ on:
         required: false
         type: string
         default: ""
+    secrets:
+      key:
+        description: "Private SSH key"
+        required: true
+        type: string
+      env-file-content:
+        description: ".env completo"
+        required: true
+
 
 env:
   SSH_AUTH_SOCK: /tmp/ssh_agent.sock
@@ -108,11 +113,12 @@ jobs:
           scp -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key \
               "$TEMP_SCRIPT" $HOST:/tmp/post_deploy.sh
           
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key $HOST \
-              "cd ${{ inputs.deploy-path }} && bash /tmp/post_deploy.sh && rm /tmp/post_deploy.sh"
-          
-          # Limpiar localmente
-          rm "$TEMP_SCRIPT"
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key $HOST "\
+              cd ${{ inputs.deploy-path }} && \
+              echo '${{ secrets.env-file-content }}' > .env && \
+              bash /tmp/post_deploy.sh &&  \
+              rm /tmp/post_deploy.sh && \
+              rm "$TEMP_SCRIPT"
           "
 
       - name: Cleanup SSH key
