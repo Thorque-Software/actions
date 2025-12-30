@@ -32,7 +32,6 @@ on:
       key:
         description: "Private SSH key"
         required: true
-        type: string
       env-file-content:
         description: ".env completo"
         required: true
