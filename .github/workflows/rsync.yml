@@ -51,7 +51,7 @@ jobs:
 
       - name: Setup SSH private key
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.ssh-private-key }}
+          SSH_PRIVATE_KEY: ${{ secrets.key }}
         run: |
           ssh-agent -a $SSH_AUTH_SOCK > /dev/null
           echo "$SSH_PRIVATE_KEY" | ssh-add - >/dev/null
@@ -76,20 +76,20 @@ jobs:
           # Usar rsync con opciones más robustas
           rsync -avz --progress \
                 --no-perms --no-owner --no-group \
-                -e "ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key" \
+                -e "ssh -o StrictHostKeyChecking=no" \
                 "${files_array[@]}" \
                 $HOST:${{ inputs.deploy-path }}/
 
       - name: Run post script
-        id: post-script
-        if: inputs.post-script-path != '' || inputs.post-script != ''
+        id: script
+        if: inputs.post-script-path != '' || inputs.script != ''
         run: |
           if [[ "${{ inputs.post-script-path }}" != "" ]]; then
             # Usar archivo existente en el repositorio
             SCRIPT_CONTENT=$(cat "${{ inputs.post-script-path }}")
           else
             # Usar contenido inline
-            SCRIPT_CONTENT="${{ inputs.post-script }}"
+            SCRIPT_CONTENT="${{ inputs.script }}"
           fi
           
           TEMP_SCRIPT=$(mktemp)
@@ -97,22 +97,12 @@ jobs:
           chmod +x "$TEMP_SCRIPT"
           
           # Copiar al servidor y ejecutar
-          scp -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key \
-              "$TEMP_SCRIPT" $HOST:/tmp/post_deploy.sh
+          scp -o StrictHostKeyChecking=no "$TEMP_SCRIPT" $HOST:/tmp/post_deploy.sh
           
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key $HOST "\
+          ssh -o StrictHostKeyChecking=no $HOST "\
               cd ${{ inputs.deploy-path }} && \
               echo '${{ secrets.env-file-content }}' > .env && \
               bash /tmp/post_deploy.sh &&  \
               rm /tmp/post_deploy.sh && \
-              rm "$TEMP_SCRIPT"
+              rm '$TEMP_SCRIPT'
           "
-
-      - name: Cleanup SSH key
-        if: always()
-        run: |
-          # Eliminar clave temporal
-          rm -f ~/.ssh/deploy_key
-          
-          # Detener agente SSH
-          eval $(ssh-agent -k)
