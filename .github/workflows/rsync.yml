@@ -37,10 +37,8 @@ env:
   SSH_AUTH_SOCK: /tmp/ssh_agent.sock
   HOST: ${{ inputs.user }}@${{ inputs.host }}
 
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-
+runs:
+  using: "composite"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
