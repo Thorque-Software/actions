@@ -1,0 +1,125 @@
+name: Reusable SSH/rsync Deployment
+
+on:
+  workflow_call:
+    inputs:
+      host:
+        description: "Server SSH host"
+        required: true
+        type: string
+      user:
+        description: "Server SSH user"
+        required: true
+        type: string
+      key:
+        description: "Private SSH key"
+        required: true
+        type: string
+      deploy-path:
+        description: "Remote server path"
+        required: true
+        type: string
+      files:
+        description: "Files to include in deployment (space separated)"
+        required: true
+        type: string
+      post-script:
+        description: "Script to run after copy files"
+        required: false
+        type: string
+      post-script-path:
+        description: "Path to post-deployment script file"
+        required: false
+        type: string
+        default: ""
+
+env:
+  SSH_AUTH_SOCK: /tmp/ssh_agent.sock
+  HOST: ${{ inputs.user }}@${{ inputs.host }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        run: |
+          # Iniciar agente SSH
+          ssh-agent -a $SSH_AUTH_SOCK > /dev/null
+          
+          # Crear directorio .ssh y configurar permisos
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          
+          # Guardar la clave privada temporalmente
+          echo "${{ inputs.key }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          
+          # Añadir la clave al agente
+          ssh-add ~/.ssh/deploy_key
+          
+          # Añadir host a known_hosts (opcional pero recomendado)
+          ssh-keyscan -H ${{ inputs.host }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Test SSH connection
+        run: |
+          ssh -o BatchMode=yes \
+              -o ConnectTimeout=5 \
+              -o StrictHostKeyChecking=no \
+              $HOST \
+              "echo 'SSH connection successful'"
+
+      - name: Create remote directory if needed
+        run: |
+          ssh -o StrictHostKeyChecking=no $HOST "mkdir -p ${{ inputs.deploy-path }}"
+
+      - name: Upload files via rsync
+        run: |
+          # Convertir la lista de archivos a un array para mejor manejo
+          files_array=(${{ inputs.files }})
+          
+          # Usar rsync con opciones más robustas
+          rsync -avz --progress \
+                --no-perms --no-owner --no-group \
+                -e "ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key" \
+                "${files_array[@]}" \
+                $HOST:${{ inputs.deploy-path }}/
+
+      - name: Run post script
+        id: post-script
+        if: inputs.post-script-path != '' || inputs.post-script != ''
+        run: |
+          if [[ "${{ inputs.post-script-path }}" != "" ]]; then
+            # Usar archivo existente en el repositorio
+            SCRIPT_CONTENT=$(cat "${{ inputs.post-script-path }}")
+          else
+            # Usar contenido inline
+            SCRIPT_CONTENT="${{ inputs.post-script }}"
+          fi
+          
+          TEMP_SCRIPT=$(mktemp)
+          echo "$SCRIPT_CONTENT" > "$TEMP_SCRIPT"
+          chmod +x "$TEMP_SCRIPT"
+          
+          # Copiar al servidor y ejecutar
+          scp -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key \
+              "$TEMP_SCRIPT" $HOST:/tmp/post_deploy.sh
+          
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key $HOST \
+              "cd ${{ inputs.deploy-path }} && bash /tmp/post_deploy.sh && rm /tmp/post_deploy.sh"
+          
+          # Limpiar localmente
+          rm "$TEMP_SCRIPT"
+          "
+
+      - name: Cleanup SSH key
+        if: always()
+        run: |
+          # Eliminar clave temporal
+          rm -f ~/.ssh/deploy_key
+          
+          # Detener agente SSH
+          eval $(ssh-agent -k)
