@@ -95,6 +95,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Health Check
+        shell: bash
         env:
           EXPECTED_BODY: brad
         run: |
