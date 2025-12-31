@@ -16,6 +16,7 @@ runs:
   using: "composite"
   steps:
     - name: Health Check
+      shell: bash
       env:
         EXPECTED_BODY: ${{ inputs.body }}
         HEALTHCHECK_URL: "${{ inputs.host }}/${{ inputs.endpoint }}"
