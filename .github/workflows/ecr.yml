@@ -113,7 +113,7 @@ jobs:
                   host: ${{ inputs.EC2_HOST }}
                   username: ${{ inputs.EC2_USER }}
                   key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
-                  envs: ECR_REGISTRY,ECR_REPOSITORY,AWS_REGION
+                  envs: ECR_REGISTRY,ECR_REPOSITORY,COMPOSE_FILE,AWS_REGION,DEPLOY_PATH
                   script: |
                       if [ -z "$ECR_REGISTRY" ]; then
                         echo "❌ Error: ECR_REGISTRY está vacío. Verifica el paso de login."
