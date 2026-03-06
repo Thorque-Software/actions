@@ -1,0 +1,173 @@
+on:
+  workflow_call:
+    inputs:
+      EC2_HOST:
+        description: "IP publica del servidor"
+        required: true
+        type: string
+      AWS_REGION:
+        required: true
+      AWS_REPOSITORY:
+        description: "Name of the ECR repository"
+        required: true
+      DEPLOY_PATH:
+        description: "Ruta remota donde se va a subir el backend"
+        required: true
+        type: string
+      COMPOSE_FILE:
+        description: "Nombre del archivo docker compose"
+        default: "docker-compose.yml"
+        type: string
+        required: false
+      healthcheck-endpoint: 
+        description: "Healthcheck endpoint route of the server (eg: 'api/v1/eso')"
+        required: false
+        type: string
+        default: "api/v1/eso"
+      EC2_USER:
+        description: "SSH host (user@ip)"
+        required: false
+        type: string
+        default: "ubuntu"
+    secrets:
+      AWS_ACCESS_KEY_ID:
+        description: "AWS access key d with"
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        description: "AWS secret access key with"
+        required: true
+      EC2_SSH_PRIVATE_KEY:
+        description: "Clave privada SSH"
+        required: true
+      ENV_FILE_CONTENT:
+        description: ".env completo"
+        required: true
+
+jobs:
+    build-and-deploy:
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Checkout código
+              uses: actions/checkout@v4
+
+            - name: Configurar credenciales de AWS
+              uses: aws-actions/configure-aws-credentials@v4
+              with:
+                  aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+                  aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+                  aws-region: ${{ inputs.AWS_REGION }}
+
+            - name: Login to Amazon ECR
+              id: login-ecr
+              uses: aws-actions/amazon-ecr-login@v2
+
+            - name: Configurar Docker Buildx
+              uses: docker/setup-buildx-action@v3
+              with:
+                  driver: docker-container
+                  buildkitd-flags: --allow-insecure-entitlement network.host
+
+            - name: Construir y subir backend (con caché)
+              env:
+                  ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+              run: |
+                  ECR_REGISTRY="${{ steps.login-ecr.outputs.registry }}"
+                  if [ -z "$ECR_REGISTRY" ]; then
+                    echo "❌ Error: ECR_REGISTRY está vacío. Verifica el paso de login."
+                    exit 1
+                  fi
+                  echo "✅ Registro ECR: $ECR_REGISTRY"
+
+                  # Construir la imagen usando BuildKit, intentando usar el caché de ECR y luego guardando el nuevo caché
+                  docker buildx build \
+                    --cache-from type=registry,ref=$ECR_REGISTRY/$ECR_REPOSITORY:cache \
+                    --cache-to type=registry,mode=max,image-manifest=true,oci-mediatypes=true,ref=$ECR_REGISTRY/$ECR_REPOSITORY:cache \
+                    -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+                    -f Dockerfile \
+                    --push .
+
+            - name: Transferir docker-compose.prod.yml a EC2
+              uses: appleboy/scp-action@v0.1.7
+              with:
+                  host: ${{ inputs.EC2_HOST }}
+                  username: ${{ inputs.EC2_USER }}
+                  key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+                  source: "${{ inputs.COMPOSE_FILE }},nginx/"
+                  target: ${{ inputs.DEPLOY_PATH }}
+                  strip_components: 0
+                  overwrite: true
+
+            - name: Desplegar en EC2 vía SSH
+              uses: appleboy/ssh-action@v1.0.3
+              env:
+                  ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+              with:
+                  host: ${{ inputs.EC2_HOST }}
+                  username: ${{ inputs.EC2_USER }}
+                  key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+                  envs: ECR_REGISTRY,ECR_REPOSITORY_BACK,ECR_REPOSITORY_FRONT,COMPOSE_FILE,AWS_REGION,DEPLOY_PATH
+                  script: |
+                      if [ -z "$ECR_REGISTRY" ]; then
+                        echo "❌ Error: ECR_REGISTRY está vacío. Verifica el paso de login."
+                        exit 1
+                      fi
+                      echo "✅ Registro ECR: $ECR_REGISTRY"
+                      echo "Repository bcak: $ECR_REPOSITORY_BACK"
+                      echo "Repository front: $ECR_REPOSITORY_FRONT"
+                      echo "Compose file: $COMPOSE_FILE"
+                      echo "Aws region: $AWS_REGION"
+                      echo "Deploy path: $DEPLOY_PATH"
+
+                      # Iniciar sesión en ECR
+                      aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
+
+                      # Descargar las nuevas imágenes
+                      docker pull $ECR_REGISTRY/$ECR_REPOSITORY_BACK:latest
+
+                      # Ir al directorio de despliegue
+                      cd $DEPLOY_PATH
+                      echo '${{ secrets.ENV_FILE_CONTENT }}' > .env
+
+                      docker compose -f $COMPOSE_FILE down
+
+                      # Run migrations
+                      docker compose -f $COMPOSE_FILE --remove-orphans run back npm run migrate 
+
+                      # Run seeders
+                      docker compose -f $COMPOSE_FILE --remove-orphans run back node seeders/index.js 
+
+                      # Levantar los contenedores con la nueva configuración
+                      docker compose -f $COMPOSE_FILE up -d --remove-orphans
+
+                      # Limpiar imágenes antiguas (opcional)
+                      docker image prune -f
+    healthcheck:
+        needs: [deploy]
+        runs-on: ubuntu-latest
+        steps:
+          - name: Health Check
+            shell: bash
+            env:
+              EXPECTED_BODY: brad
+            run: |
+              HEALTHCHECK_URL="${{ inputs.EC2_HOST }}/${{ inputs.healthcheck-endpoint }}"
+              echo "Healthcheck URL: $HEALTHCHECK_URL"
+
+              for i in {1..10}; do
+                status_code=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTHCHECK_URL")
+                body=$(curl -s "$HEALTHCHECK_URL")
+
+                if [ "$status_code" = "200" ]; then
+                  if [ -z "$EXPECTED_BODY" ] || [ "$body" = "$EXPECTED_BODY" ]; then
+                    echo "✅ Server is up and returning expected response!"
+                    exit 0
+                  fi
+                fi
+                
+                echo "⏳ Attempt $i: Server not ready yet (Status: $status_code), waiting 5 seconds..."
+                sleep 5
+              done
+              
+              echo "❌ Server did not return expected response in time"
+              exit 1
