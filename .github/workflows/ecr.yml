@@ -8,7 +8,7 @@ on:
       AWS_REGION:
         required: true
         type: string
-      AWS_REPOSITORY:
+      ECR_REPOSITORY:
         description: "Name of the ECR repository"
         required: true
         type: string
@@ -44,6 +44,9 @@ on:
       ENV_FILE_CONTENT:
         description: ".env completo"
         required: true
+
+env:
+  ECR_REPOSITORY: ${{ inputs.ECR_REPOSITORY }} 
 
 jobs:
     build-and-deploy:
@@ -108,15 +111,14 @@ jobs:
                   host: ${{ inputs.EC2_HOST }}
                   username: ${{ inputs.EC2_USER }}
                   key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
-                  envs: ECR_REGISTRY,ECR_REPOSITORY_BACK,ECR_REPOSITORY_FRONT,COMPOSE_FILE,AWS_REGION,DEPLOY_PATH
+                  envs: ECR_REGISTRY,ECR_REPOSITORY,COMPOSE_FILE,AWS_REGION,DEPLOY_PATH
                   script: |
                       if [ -z "$ECR_REGISTRY" ]; then
                         echo "❌ Error: ECR_REGISTRY está vacío. Verifica el paso de login."
                         exit 1
                       fi
                       echo "✅ Registro ECR: $ECR_REGISTRY"
-                      echo "Repository bcak: $ECR_REPOSITORY_BACK"
-                      echo "Repository front: $ECR_REPOSITORY_FRONT"
+                      echo "Repository bcak: $ECR_REPOSITORY"
                       echo "Compose file: $COMPOSE_FILE"
                       echo "Aws region: $AWS_REGION"
                       echo "Deploy path: $DEPLOY_PATH"
@@ -125,7 +127,7 @@ jobs:
                       aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
 
                       # Descargar las nuevas imágenes
-                      docker pull $ECR_REGISTRY/$ECR_REPOSITORY_BACK:latest
+                      docker pull $ECR_REGISTRY/$ECR_REPOSITORY:latest
 
                       # Ir al directorio de despliegue
                       cd $DEPLOY_PATH
