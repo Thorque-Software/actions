@@ -7,9 +7,11 @@ on:
         type: string
       AWS_REGION:
         required: true
+        type: string
       AWS_REPOSITORY:
         description: "Name of the ECR repository"
         required: true
+        type: string
       DEPLOY_PATH:
         description: "Ruta remota donde se va a subir el backend"
         required: true
