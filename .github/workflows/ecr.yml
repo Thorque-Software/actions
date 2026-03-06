@@ -107,6 +107,7 @@ jobs:
               uses: appleboy/ssh-action@v1.0.3
               env:
                   ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+                  COMPOSE_FILE: ${{ inputs.COMPOSE_FILE }}
               with:
                   host: ${{ inputs.EC2_HOST }}
                   username: ${{ inputs.EC2_USER }}
