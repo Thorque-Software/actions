@@ -294,9 +294,9 @@ jobs:
       - name: Health Check
         shell: bash
         env:
-          EXPECTED_BODY: ${{ inputs.body }}
-          HEALTHCHECK_URL: "http://${{ inputs.EC2_HOST }}/${{ inputs.endpoint }}"
-          MAX_RETRIES: ${{ inputs.retries }}
+          EXPECTED_BODY: ${{ inputs.healthcheck-expected-body }}
+          HEALTHCHECK_URL: "http://${{ inputs.EC2_HOST }}/${{ inputs.healthcheck-endpoint }}"
+          MAX_RETRIES: ${{ inputs.healthcheck-retries }}
         run: |
           echo "Healthcheck URL: $HEALTHCHECK_URL"
 
