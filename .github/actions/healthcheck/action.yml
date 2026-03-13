@@ -12,6 +12,10 @@ inputs:
     description: 'Expected body response from the Server'
     required: false
     default: 'brad'
+  retries:
+    description: 'Maximum number of retries before failing'
+    required: false
+    default: '10'
 runs:
   using: "composite"
   steps:
@@ -19,11 +23,12 @@ runs:
       shell: bash
       env:
         EXPECTED_BODY: ${{ inputs.body }}
-        HEALTHCHECK_URL: "${{ inputs.host }}/${{ inputs.endpoint }}"
+        HEALTHCHECK_URL: "http://${{ inputs.host }}/${{ inputs.endpoint }}"
+        MAX_RETRIES: ${{ inputs.retries }}
       run: |
         echo "Healthcheck URL: $HEALTHCHECK_URL"
 
-        for i in {1..10}; do
+        for i in $(seq 1 $MAX_RETRIES); do
           status_code=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTHCHECK_URL")
           body=$(curl -s "$HEALTHCHECK_URL")
 
@@ -34,7 +39,7 @@ runs:
             fi
           fi
 
-          echo "⏳ Attempt $i: Server not ready yet (Status: $status_code), waiting 5 seconds..."
+          echo "⏳ Attempt $i/$MAX_RETRIES: Server not ready yet (Status: $status_code), waiting 5 seconds..."
           sleep 5
         done
 

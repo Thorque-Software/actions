@@ -1,0 +1,300 @@
+name: ECR Deploy
+
+on:
+  workflow_call:
+    inputs:
+      # --- AWS / ECR ---
+      AWS_REGION:
+        description: "Región de AWS"
+        required: true
+        type: string
+      ECR_REPOSITORY:
+        description: "Nombre del repositorio ECR"
+        required: true
+        type: string
+
+      # --- Build ---
+      dockerfile:
+        description: "Nombre del Dockerfile a usar para el build"
+        default: "Dockerfile"
+        required: false
+        type: string
+      build-context:
+        description: "Contexto de build de Docker (ruta relativa)"
+        default: "."
+        required: false
+        type: string
+      image-tag:
+        description: "Tag de la imagen Docker en ECR"
+        default: "latest"
+        required: false
+        type: string
+
+      # --- EC2 / SSH ---
+      EC2_HOST:
+        description: "IP pública del servidor EC2"
+        required: true
+        type: string
+      EC2_USER:
+        description: "Usuario SSH del servidor EC2"
+        required: false
+        default: "ubuntu"
+        type: string
+      DEPLOY_PATH:
+        description: "Ruta remota de deploy en EC2"
+        required: true
+        type: string
+
+      # --- Docker Compose ---
+      COMPOSE_FILE:
+        description: "Nombre del archivo docker-compose a usar"
+        default: "docker-compose.yml"
+        required: false
+        type: string
+      extra-files:
+        description: "Archivos/carpetas adicionales a transferir vía SCP (separados por coma, ej: 'nginx/,config/')"
+        default: ""
+        required: false
+        type: string
+      service-name:
+        description: "Nombre del servicio Docker para correr comandos (migraciones, seeders, etc.)"
+        default: "back"
+        required: false
+        type: string
+
+      # --- Migraciones ---
+      run-migrations:
+        description: "Correr migraciones antes de levantar los contenedores"
+        default: true
+        required: false
+        type: boolean
+      migration-command:
+        description: "Comando de migraciones a ejecutar dentro del servicio"
+        default: "npm run migrate"
+        required: false
+        type: string
+
+      # --- Seeders ---
+      run-seeders:
+        description: "Correr seeders después de las migraciones"
+        default: false
+        required: false
+        type: boolean
+      seeder-command:
+        description: "Comando de seeders a ejecutar dentro del servicio"
+        default: "node seeders/index.js"
+        required: false
+        type: string
+
+      # --- Scripts custom ---
+      pre-deploy-script:
+        description: "Script bash inline a correr en EC2 antes de levantar los contenedores (luego del docker compose down)"
+        default: ""
+        required: false
+        type: string
+      post-deploy-script:
+        description: "Script bash inline a correr en EC2 después de levantar los contenedores"
+        default: ""
+        required: false
+        type: string
+
+      # --- Healthcheck ---
+      healthcheck-enabled:
+        description: "Habilitar el healthcheck post-deploy"
+        default: true
+        required: false
+        type: boolean
+      healthcheck-endpoint:
+        description: "Endpoint del healthcheck (ej: 'api/v1/health')"
+        default: "api/v1/eso"
+        required: false
+        type: string
+      healthcheck-expected-body:
+        description: "Cuerpo esperado en la respuesta del healthcheck (vacío para omitir validación)"
+        default: "brad"
+        required: false
+        type: string
+      healthcheck-retries:
+        description: "Número máximo de reintentos del healthcheck"
+        default: 10
+        required: false
+        type: number
+
+      # --- Limpieza ---
+      prune-images:
+        description: "Limpiar imágenes Docker antiguas en EC2 después del deploy"
+        default: true
+        required: false
+        type: boolean
+
+    secrets:
+      AWS_ACCESS_KEY_ID:
+        description: "AWS Access Key ID con permisos sobre ECR"
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        description: "AWS Secret Access Key"
+        required: true
+      EC2_SSH_PRIVATE_KEY:
+        description: "Clave privada SSH para acceder a EC2"
+        required: true
+      ENV_FILE_CONTENT:
+        description: "Contenido completo del archivo .env"
+        required: true
+
+env:
+  ECR_REPOSITORY: ${{ inputs.ECR_REPOSITORY }}
+  AWS_REGION: ${{ inputs.AWS_REGION }}
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Configurar credenciales de AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.AWS_REGION }}
+
+      - name: Login a Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Configurar Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker-container
+          buildkitd-flags: --allow-insecure-entitlement network.host
+
+      - name: Construir y subir imagen a ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          if [ -z "$ECR_REGISTRY" ]; then
+            echo "❌ Error: ECR_REGISTRY está vacío. Verifica el paso de login."
+            exit 1
+          fi
+          echo "✅ Registro ECR: $ECR_REGISTRY"
+          echo "📦 Repositorio: $ECR_REPOSITORY"
+          echo "🏷️  Tag: ${{ inputs.image-tag }}"
+          echo "🐳 Dockerfile: ${{ inputs.dockerfile }}"
+
+          docker buildx build \
+            --cache-from type=registry,ref=$ECR_REGISTRY/$ECR_REPOSITORY:cache \
+            --cache-to type=registry,mode=max,image-manifest=true,oci-mediatypes=true,ref=$ECR_REGISTRY/$ECR_REPOSITORY:cache \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:${{ inputs.image-tag }} \
+            -f ${{ inputs.dockerfile }} \
+            --push ${{ inputs.build-context }}
+
+      - name: Transferir docker-compose a EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ inputs.EC2_HOST }}
+          username: ${{ inputs.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          source: "${{ inputs.COMPOSE_FILE }}"
+          target: ${{ inputs.DEPLOY_PATH }}
+          strip_components: 0
+          overwrite: true
+
+      - name: Transferir archivos adicionales a EC2
+        if: inputs.extra-files != ''
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ inputs.EC2_HOST }}
+          username: ${{ inputs.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          source: "${{ inputs.extra-files }}"
+          target: ${{ inputs.DEPLOY_PATH }}
+          strip_components: 0
+          overwrite: true
+
+      - name: Desplegar en EC2 vía SSH
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          COMPOSE_FILE: ${{ inputs.COMPOSE_FILE }}
+          DEPLOY_PATH: ${{ inputs.DEPLOY_PATH }}
+          SERVICE_NAME: ${{ inputs.service-name }}
+          RUN_MIGRATIONS: ${{ inputs.run-migrations }}
+          MIGRATION_CMD: ${{ inputs.migration-command }}
+          RUN_SEEDERS: ${{ inputs.run-seeders }}
+          SEEDER_CMD: ${{ inputs.seeder-command }}
+          PRE_DEPLOY_SCRIPT: ${{ inputs.pre-deploy-script }}
+          POST_DEPLOY_SCRIPT: ${{ inputs.post-deploy-script }}
+          PRUNE_IMAGES: ${{ inputs.prune-images }}
+          IMAGE_TAG: ${{ inputs.image-tag }}
+        with:
+          host: ${{ inputs.EC2_HOST }}
+          username: ${{ inputs.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          envs: ECR_REGISTRY,ECR_REPOSITORY,COMPOSE_FILE,AWS_REGION,DEPLOY_PATH,SERVICE_NAME,RUN_MIGRATIONS,MIGRATION_CMD,RUN_SEEDERS,SEEDER_CMD,PRE_DEPLOY_SCRIPT,POST_DEPLOY_SCRIPT,PRUNE_IMAGES,IMAGE_TAG
+          script: |
+            if [ -z "$ECR_REGISTRY" ]; then
+              echo "❌ Error: ECR_REGISTRY está vacío."
+              exit 1
+            fi
+            echo "✅ ECR: $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+
+            # Iniciar sesión en ECR
+            aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
+
+            # Descargar la nueva imagen
+            docker pull $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+            # Directorio de despliegue y archivo .env
+            cd $DEPLOY_PATH
+            echo '${{ secrets.ENV_FILE_CONTENT }}' > .env
+
+            # Bajar contenedores actuales
+            docker compose -f $COMPOSE_FILE down
+
+            # Script pre-deploy
+            if [ -n "$PRE_DEPLOY_SCRIPT" ]; then
+              echo "▶️ Ejecutando pre-deploy script..."
+              eval "$PRE_DEPLOY_SCRIPT"
+            fi
+
+            # Migraciones
+            if [ "$RUN_MIGRATIONS" = "true" ]; then
+              echo "▶️ Ejecutando migraciones..."
+              docker compose -f $COMPOSE_FILE run --rm $SERVICE_NAME $MIGRATION_CMD
+            fi
+
+            # Seeders
+            if [ "$RUN_SEEDERS" = "true" ]; then
+              echo "▶️ Ejecutando seeders..."
+              docker compose -f $COMPOSE_FILE run --rm $SERVICE_NAME $SEEDER_CMD
+            fi
+
+            # Levantar contenedores con la nueva imagen
+            docker compose -f $COMPOSE_FILE up -d --remove-orphans
+
+            # Script post-deploy
+            if [ -n "$POST_DEPLOY_SCRIPT" ]; then
+              echo "▶️ Ejecutando post-deploy script..."
+              eval "$POST_DEPLOY_SCRIPT"
+            fi
+
+            # Limpieza de imágenes antiguas
+            if [ "$PRUNE_IMAGES" = "true" ]; then
+              echo "🧹 Limpiando imágenes antiguas..."
+              docker image prune -f
+            fi
+
+  healthcheck:
+    needs: [build-and-deploy]
+    if: inputs.healthcheck-enabled == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Health Check
+        uses: ./.github/actions/healthcheck
+        with:
+          host: ${{ inputs.EC2_HOST }}
+          endpoint: ${{ inputs.healthcheck-endpoint }}
+          body: ${{ inputs.healthcheck-expected-body }}
+          retries: ${{ inputs.healthcheck-retries }}
