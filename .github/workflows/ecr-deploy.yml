@@ -292,9 +292,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Health Check
-        uses: ./.github/actions/healthcheck
-        with:
-          host: ${{ inputs.EC2_HOST }}
-          endpoint: ${{ inputs.healthcheck-endpoint }}
-          body: ${{ inputs.healthcheck-expected-body }}
-          retries: ${{ inputs.healthcheck-retries }}
+        shell: bash
+        env:
+          EXPECTED_BODY: ${{ inputs.body }}
+          HEALTHCHECK_URL: "http://${{ inputs.host }}/${{ inputs.endpoint }}"
+          MAX_RETRIES: ${{ inputs.retries }}
+        run: |
+          echo "Healthcheck URL: $HEALTHCHECK_URL"
+
+          for i in $(seq 1 $MAX_RETRIES); do
+            status_code=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTHCHECK_URL")
+            body=$(curl -s "$HEALTHCHECK_URL")
+
+            if [ "$status_code" = "200" ]; then
+              if [ -z "$EXPECTED_BODY" ] || [ "$body" = "$EXPECTED_BODY" ]; then
+                echo "✅ Server is up and returning expected response!"
+                exit 0
+              fi
+            fi
+
+            echo "⏳ Attempt $i/$MAX_RETRIES: Server not ready yet (Status: $status_code), waiting 5 seconds..."
+            sleep 5
+          done
+
+          echo "❌ Server did not return expected response in time"
+          exit 1
