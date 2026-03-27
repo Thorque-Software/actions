@@ -157,6 +157,7 @@ jobs:
       - name: Exportar imagen como .tar
         run: |
           docker save ${{ inputs.image-name }}:${{ inputs.image-tag }} -o image.tar
+          chmod 644 image.tar
           echo "Imagen exportada: $(du -sh image.tar | cut -f1)"
 
       - name: Transferir docker-compose al servidor
