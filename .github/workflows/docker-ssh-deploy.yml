@@ -1,0 +1,293 @@
+name: Docker SSH Deploy
+
+on:
+  workflow_call:
+    inputs:
+      # --- Build ---
+      image-name:
+        description: "Nombre local de la imagen Docker (ej: myapp)"
+        required: true
+        type: string
+      image-tag:
+        description: "Tag de la imagen Docker"
+        default: "latest"
+        required: false
+        type: string
+      dockerfile:
+        description: "Nombre del Dockerfile a usar"
+        default: "Dockerfile"
+        required: false
+        type: string
+      build-context:
+        description: "Contexto de build de Docker (ruta relativa)"
+        default: "."
+        required: false
+        type: string
+
+      # --- SSH / Servidor ---
+      server-host:
+        description: "IP pública o dominio del servidor"
+        required: true
+        type: string
+      server-user:
+        description: "Usuario SSH del servidor"
+        required: false
+        default: "ubuntu"
+        type: string
+      deploy-path:
+        description: "Ruta remota de deploy en el servidor"
+        required: true
+        type: string
+
+      # --- Docker Compose ---
+      compose-file:
+        description: "Nombre del archivo docker-compose a usar"
+        default: "docker-compose.yml"
+        required: false
+        type: string
+      extra-files:
+        description: "Archivos/carpetas adicionales a transferir vía SCP (separados por coma, ej: 'nginx/,config/')"
+        default: ""
+        required: false
+        type: string
+      service-name:
+        description: "Nombre del servicio Docker para correr comandos (migraciones, seeders, etc.)"
+        default: "back"
+        required: false
+        type: string
+
+      # --- Migraciones ---
+      run-migrations:
+        description: "Correr migraciones antes de levantar los contenedores"
+        default: true
+        required: false
+        type: boolean
+      migration-command:
+        description: "Comando de migraciones a ejecutar dentro del servicio"
+        default: "npm run migrate"
+        required: false
+        type: string
+
+      # --- Seeders ---
+      run-seeders:
+        description: "Correr seeders después de las migraciones"
+        default: false
+        required: false
+        type: boolean
+      seeder-command:
+        description: "Comando de seeders a ejecutar dentro del servicio"
+        default: "node seeders/index.js"
+        required: false
+        type: string
+
+      # --- Scripts custom ---
+      pre-deploy-script:
+        description: "Script bash inline a correr en el servidor antes de levantar los contenedores"
+        default: ""
+        required: false
+        type: string
+      post-deploy-script:
+        description: "Script bash inline a correr en el servidor después de levantar los contenedores"
+        default: ""
+        required: false
+        type: string
+
+      # --- Healthcheck ---
+      healthcheck-enabled:
+        description: "Habilitar el healthcheck post-deploy"
+        default: true
+        required: false
+        type: boolean
+      healthcheck-endpoint:
+        description: "Endpoint del healthcheck (ej: 'api/v1/health')"
+        default: "api/v1/eso"
+        required: false
+        type: string
+      healthcheck-expected-body:
+        description: "Cuerpo esperado en la respuesta del healthcheck (vacío para omitir validación)"
+        default: "brad"
+        required: false
+        type: string
+      healthcheck-retries:
+        description: "Número máximo de reintentos del healthcheck"
+        default: 10
+        required: false
+        type: number
+
+      # --- Limpieza ---
+      prune-images:
+        description: "Limpiar imágenes Docker antiguas en el servidor después del deploy"
+        default: true
+        required: false
+        type: boolean
+
+    secrets:
+      ssh-private-key:
+        description: "Clave privada SSH para acceder al servidor"
+        required: true
+      env-file-content:
+        description: "Contenido completo del archivo .env"
+        required: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Configurar Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker-container
+          buildkitd-flags: --allow-insecure-entitlement network.host
+
+      - name: Construir imagen Docker
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.build-context }}
+          file: ${{ inputs.dockerfile }}
+          push: false
+          load: true
+          tags: ${{ inputs.image-name }}:${{ inputs.image-tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Exportar imagen como .tar
+        run: |
+          docker save ${{ inputs.image-name }}:${{ inputs.image-tag }} -o image.tar
+          echo "Imagen exportada: $(du -sh image.tar | cut -f1)"
+
+      - name: Transferir docker-compose al servidor
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ inputs.server-host }}
+          username: ${{ inputs.server-user }}
+          key: ${{ secrets.ssh-private-key }}
+          source: "${{ inputs.compose-file }}"
+          target: ${{ inputs.deploy-path }}
+          strip_components: 0
+          overwrite: true
+
+      - name: Transferir archivos adicionales al servidor
+        if: inputs.extra-files != ''
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ inputs.server-host }}
+          username: ${{ inputs.server-user }}
+          key: ${{ secrets.ssh-private-key }}
+          source: "${{ inputs.extra-files }}"
+          target: ${{ inputs.deploy-path }}
+          strip_components: 0
+          overwrite: true
+
+      - name: Transferir imagen .tar al servidor
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ inputs.server-host }}
+          username: ${{ inputs.server-user }}
+          key: ${{ secrets.ssh-private-key }}
+          source: "image.tar"
+          target: ${{ inputs.deploy-path }}
+          overwrite: true
+
+      - name: Desplegar en servidor vía SSH
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          IMAGE_NAME: ${{ inputs.image-name }}
+          IMAGE_TAG: ${{ inputs.image-tag }}
+          COMPOSE_FILE: ${{ inputs.compose-file }}
+          DEPLOY_PATH: ${{ inputs.deploy-path }}
+          SERVICE_NAME: ${{ inputs.service-name }}
+          RUN_MIGRATIONS: ${{ inputs.run-migrations }}
+          MIGRATION_CMD: ${{ inputs.migration-command }}
+          RUN_SEEDERS: ${{ inputs.run-seeders }}
+          SEEDER_CMD: ${{ inputs.seeder-command }}
+          PRE_DEPLOY_SCRIPT: ${{ inputs.pre-deploy-script }}
+          POST_DEPLOY_SCRIPT: ${{ inputs.post-deploy-script }}
+          PRUNE_IMAGES: ${{ inputs.prune-images }}
+          ENV_FILE_CONTENT: ${{ secrets.env-file-content }}
+        with:
+          host: ${{ inputs.server-host }}
+          username: ${{ inputs.server-user }}
+          key: ${{ secrets.ssh-private-key }}
+          envs: IMAGE_NAME,IMAGE_TAG,COMPOSE_FILE,DEPLOY_PATH,SERVICE_NAME,RUN_MIGRATIONS,MIGRATION_CMD,RUN_SEEDERS,SEEDER_CMD,PRE_DEPLOY_SCRIPT,POST_DEPLOY_SCRIPT,PRUNE_IMAGES,ENV_FILE_CONTENT
+          script: |
+            cd $DEPLOY_PATH
+
+            # Cargar imagen desde .tar
+            echo "▶️ Cargando imagen Docker desde image.tar..."
+            docker load -i image.tar
+            rm -f image.tar
+
+            # Archivo .env
+            echo "$ENV_FILE_CONTENT" > .env
+
+            # Bajar contenedores actuales
+            docker compose -f $COMPOSE_FILE down
+
+            # Script pre-deploy
+            if [ -n "$PRE_DEPLOY_SCRIPT" ]; then
+              echo "▶️ Ejecutando pre-deploy script..."
+              eval "$PRE_DEPLOY_SCRIPT"
+            fi
+
+            # Migraciones
+            if [ "$RUN_MIGRATIONS" = "true" ]; then
+              echo "▶️ Ejecutando migraciones..."
+              docker compose -f $COMPOSE_FILE run --rm $SERVICE_NAME $MIGRATION_CMD
+            fi
+
+            # Seeders
+            if [ "$RUN_SEEDERS" = "true" ]; then
+              echo "▶️ Ejecutando seeders..."
+              docker compose -f $COMPOSE_FILE run --rm $SERVICE_NAME $SEEDER_CMD
+            fi
+
+            # Levantar contenedores con la nueva imagen
+            docker compose -f $COMPOSE_FILE up -d --remove-orphans
+
+            # Script post-deploy
+            if [ -n "$POST_DEPLOY_SCRIPT" ]; then
+              echo "▶️ Ejecutando post-deploy script..."
+              eval "$POST_DEPLOY_SCRIPT"
+            fi
+
+            # Limpieza de imágenes antiguas
+            if [ "$PRUNE_IMAGES" = "true" ]; then
+              echo "🧹 Limpiando imágenes antiguas..."
+              docker image prune -f
+            fi
+
+  healthcheck:
+    needs: [build-and-deploy]
+    if: inputs.healthcheck-enabled == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Health Check
+        shell: bash
+        env:
+          EXPECTED_BODY: ${{ inputs.healthcheck-expected-body }}
+          HEALTHCHECK_URL: "http://${{ inputs.server-host }}/${{ inputs.healthcheck-endpoint }}"
+          MAX_RETRIES: ${{ inputs.healthcheck-retries }}
+        run: |
+          echo "Healthcheck URL: $HEALTHCHECK_URL"
+
+          for i in $(seq 1 $MAX_RETRIES); do
+            status_code=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTHCHECK_URL")
+            body=$(curl -s "$HEALTHCHECK_URL")
+
+            if [ "$status_code" = "200" ]; then
+              if [ -z "$EXPECTED_BODY" ] || [ "$body" = "$EXPECTED_BODY" ]; then
+                echo "✅ Server is up and returning expected response!"
+                exit 0
+              fi
+            fi
+
+            echo "⏳ Attempt $i/$MAX_RETRIES: Server not ready yet (Status: $status_code), waiting 5 seconds..."
+            sleep 5
+          done
+
+          echo "❌ Server did not return expected response in time"
+          exit 1

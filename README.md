@@ -27,7 +27,7 @@ Colección de workflows reutilizables de GitHub Actions para desplegar aplicacio
 | 1 | rsync | `rsync.yml` | ⚡⚡⚡ | ★★☆ | Baja | Dev |
 | 2 | Docker Compose en servidor | `deploy.yml` | ⚡⚡☆ | ★★★ | Baja | Dev / Staging |
 | 3 | ECR Deploy | `ecr-deploy.yml` | ⚡⚡☆ | ★★★★ | Media | Producción |
-| 4 | Docker image via SSH | *(propuesto)* | ⚡⚡⚡ | ★★★★ | Baja | Dev / Staging |
+| 4 | Docker image via SSH | `docker-ssh-deploy.yml` | ⚡⚡⚡ | ★★★★ | Baja | Dev / Staging |
 | 5 | GHCR Deploy | *(propuesto)* | ⚡⚡☆ | ★★★★ | Baja | Producción |
 | 6 | Blue/Green con ECR | *(propuesto)* | ⚡☆☆ | ★★★★★ | Alta | Producción crítica |
 
@@ -281,13 +281,15 @@ jobs:
 
 ## Estrategias recomendadas
 
-Las siguientes estrategias no tienen un workflow implementado aún pero se describen con suficiente detalle para ser adoptadas.
+Las estrategias 5 y 6 no tienen un workflow implementado aún pero se describen con suficiente detalle para ser adoptadas.
 
 ---
 
 ### 4. Docker image via SSH (sin registry)
 
-Esta estrategia elimina la necesidad de un registry externo manteniendo la ventaja de que el build ocurre en CI. La imagen se guarda como un archivo `.tar`, se sube al servidor por SCP y se carga con `docker load`.
+**Archivo:** `.github/workflows/docker-ssh-deploy.yml`
+
+Elimina la necesidad de un registry externo manteniendo la ventaja de que el build ocurre en CI. La imagen se guarda como un archivo `.tar`, se sube al servidor por SCP y se carga con `docker load`.
 
 #### Cómo funciona
 
@@ -295,31 +297,101 @@ Esta estrategia elimina la necesidad de un registry externo manteniendo la venta
 CI Runner
    │
    ├─ checkout
-   ├─ docker build ──→ imagen local en CI
-   ├─ docker save | gzip ──→ image.tar.gz
-   ├─ scp image.tar.gz ──────────────────→ EC2
+   ├─ docker buildx build ──→ imagen local en CI (caché via GHA)
+   ├─ docker save ──→ image.tar
+   ├─ scp docker-compose.yml ───────────→ servidor
+   ├─ scp image.tar ────────────────────→ servidor
    └─ SSH:
-         docker load < image.tar.gz
+         docker load -i image.tar
+         echo $ENV > .env
          docker compose down
+         [migraciones]
+         [seeders]
          docker compose up -d
-         rm image.tar.gz
+         [docker image prune]
 ```
 
-#### Esquema de workflow
+#### Inputs principales
+
+| Input | Requerido | Default | Descripción |
+|-------|-----------|---------|-------------|
+| `image-name` | ✅ | — | Nombre local de la imagen Docker |
+| `server-host` | ✅ | — | IP pública o dominio del servidor |
+| `deploy-path` | ✅ | — | Ruta destino en el servidor |
+| `image-tag` | ❌ | `latest` | Tag de la imagen |
+| `dockerfile` | ❌ | `Dockerfile` | Nombre del Dockerfile |
+| `build-context` | ❌ | `.` | Contexto de build |
+| `server-user` | ❌ | `ubuntu` | Usuario SSH |
+| `compose-file` | ❌ | `docker-compose.yml` | Archivo compose a usar |
+| `extra-files` | ❌ | `""` | Archivos/carpetas adicionales a transferir (ej: `nginx/,config/`) |
+| `service-name` | ❌ | `back` | Servicio Docker para comandos |
+| `run-migrations` | ❌ | `true` | Ejecutar migraciones |
+| `migration-command` | ❌ | `npm run migrate` | Comando de migración |
+| `run-seeders` | ❌ | `false` | Ejecutar seeders |
+| `seeder-command` | ❌ | `node seeders/index.js` | Comando de seeders |
+| `pre-deploy-script` | ❌ | `""` | Script bash antes del `compose up` |
+| `post-deploy-script` | ❌ | `""` | Script bash después del `compose up` |
+| `healthcheck-enabled` | ❌ | `true` | Activar healthcheck |
+| `healthcheck-endpoint` | ❌ | `api/v1/eso` | Endpoint de healthcheck |
+| `healthcheck-expected-body` | ❌ | `brad` | Cuerpo esperado |
+| `healthcheck-retries` | ❌ | `10` | Reintentos del healthcheck |
+| `prune-images` | ❌ | `true` | Limpiar imágenes antiguas |
+
+#### Secrets requeridos
+
+| Secret | Descripción |
+|--------|-------------|
+| `ssh-private-key` | Clave privada SSH |
+| `env-file-content` | Contenido del `.env` |
+
+#### Ejemplo de uso
 
 ```yaml
-# En el proyecto:
+# .github/workflows/deploy.yml en tu proyecto
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
 jobs:
+  # Mínimo — solo los inputs obligatorios
   deploy:
-    uses: Thorque/actions/.github/workflows/docker-ssh.yml@main
+    uses: Thorque/actions/.github/workflows/docker-ssh-deploy.yml@main
     with:
-      EC2_HOST: "1.2.3.4"
-      DEPLOY_PATH: /home/ubuntu/app
-      image-name: my-app
-      COMPOSE_FILE: docker-compose.yml
+      image-name: myapp
+      server-host: "1.2.3.4"
+      deploy-path: /home/ubuntu/app
     secrets:
-      EC2_SSH_PRIVATE_KEY: ${{ secrets.SSH_KEY }}
-      ENV_FILE_CONTENT: ${{ secrets.ENV_FILE }}
+      ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+      env-file-content: ${{ secrets.ENV_FILE }}
+
+  # Completo — configuración avanzada
+  deploy-full:
+    uses: Thorque/actions/.github/workflows/docker-ssh-deploy.yml@main
+    with:
+      image-name: myapp
+      image-tag: ${{ github.sha }}        # tag por commit SHA en vez de "latest"
+      dockerfile: Dockerfile.prod
+      server-host: "1.2.3.4"
+      server-user: ubuntu
+      deploy-path: /home/ubuntu/app
+      compose-file: docker-compose.prod.yml
+      extra-files: "nginx/,config/"       # carpetas adicionales a transferir
+      service-name: back
+      run-migrations: true
+      migration-command: npm run db:prod:migrate
+      run-seeders: false
+      pre-deploy-script: "echo 'Iniciando deploy...'"
+      post-deploy-script: "echo 'Deploy finalizado!'"
+      healthcheck-enabled: true
+      healthcheck-endpoint: api/v1/health
+      healthcheck-expected-body: brad
+      healthcheck-retries: 15
+      prune-images: true
+    secrets:
+      ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+      env-file-content: ${{ secrets.ENV_FILE }}
 ```
 
 #### ✅ Pros
@@ -327,13 +399,12 @@ jobs:
 - El build ocurre en CI (no consume CPU del servidor).
 - Entorno reproducible igual que con ECR.
 - Simple de configurar: solo necesita SSH.
-- Ideal cuando el equipo no quiere gestionar credenciales de un registry.
+- Caché de capas Docker entre builds via GitHub Actions cache.
 
 #### ❌ Contras
-- Transferir una imagen `.tar.gz` puede ser lento (100-500 MB típicamente).
-- Sin caché entre builds: cada deploy buildea desde cero (a menos que se use `--cache-from` con una imagen local en el servidor).
+- Transferir una imagen `.tar` puede ser lento (100-500 MB típicamente).
 - Si la imagen crece mucho, el SCP puede convertirse en el cuello de botella.
-- No hay historial de imágenes.
+- No hay historial de imágenes (sin registry).
 
 #### Cuándo usarlo
 **Desarrollo y staging** donde no se tiene o no se quiere un registry. Es una mejora directa sobre `deploy.yml` (el build deja de ocurrir en el servidor) sin agregar complejidad de AWS.
