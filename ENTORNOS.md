@@ -4,6 +4,8 @@ Este documento explica cómo están organizados los entornos donde corre la apli
 
 ---
 
+Vamos a suponer que tenemos un projecto llamado `project`
+
 ## Los tres entornos
 
 | Entorno | Para qué sirve |
@@ -18,9 +20,9 @@ Este documento explica cómo están organizados los entornos donde corre la apli
 
 | Entorno | Backend (API) | Frontend |
 |---------|--------------|----------|
-| **dev** | `dev.api.thorque.io` | — *(no tiene frontend propio)* |
-| **staging** | `staging.api.thorque.io` | `staging.thorque.io` |
-| **prod** | `api.thorque.io` | `thorque.io` |
+| **dev** | `dev.project.thorque.com.ar/api/v1` | — *(no tiene frontend propio)* |
+| **staging** | `project.thorque.com.ar/api/v1` | `project.thorque.com.ar` |
+| **prod** | `project.com/api/v1` | `project.com` |
 
 ---
 
@@ -48,13 +50,13 @@ CORS es un mecanismo de seguridad que controla desde qué lugares se puede consu
 
 ### Durante el desarrollo del frontend
 
-Cuando el equipo de frontend desarrolla en su computadora local, **debe apuntar su aplicación a la API de dev** (`dev.api.thorque.io`).
+Cuando el equipo de frontend desarrolla en su computadora local, **debe apuntar su aplicación a la API de dev** (`dev.project.thorque.com.ar/api/v1`).
 
 Si intenta hacer pedidos desde otro origen (por ejemplo, desde `localhost` apuntando a la API de staging o de prod), obtendrá un **error de CORS** y la aplicación no funcionará.
 
 ### En staging
 
-El backend de staging (`staging.api.thorque.io`) solo acepta pedidos provenientes del frontend de staging (`staging.thorque.io`). Ambos están diseñados para funcionar juntos como un sistema cerrado.
+El backend de staging (`project.thorque.com.ar/api/v1`) solo acepta pedidos provenientes del frontend de staging (`project.thorque.com.ar`). Ambos están diseñados para funcionar juntos como un sistema cerrado.
 
 Si alguien intenta consumir la API de staging directamente —por ejemplo, desde Postman, Insomnia, o cualquier herramienta externa— recibirá un **error de CORS** y no podrá obtener respuesta.
 
