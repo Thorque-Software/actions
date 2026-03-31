@@ -288,11 +288,10 @@ on:
 
 jobs:
   deploy:
-    environment: development
-    uses: thorque-software/thorque-actions/.github/workflows/docker-ssh-deploy.yml@main
+    uses: Thorque-Software/actions/.github/workflows/docker-ssh-deploy.yml@main
     with:
       image-name: thorque-back
-      server-host: ${{ vars.SERVER_IP }}
+      server-host: ${{ vars.DEV_HOST }}
       deploy-path: /home/ubuntu/thorque-back
       compose-file: docker-compose.dev.yml
       extra-files: "nginx/"
@@ -301,8 +300,8 @@ jobs:
       migration-command: npm run db:migrate
       healthcheck-endpoint: api/v1/health
     secrets:
-      ssh-private-key: ${{ secrets.SSH_KEY }}
-      env-file-content: ${{ secrets.ENV_FILE }}
+      ssh-private-key: ${{ secrets.DEV_SSH_KEY }}
+      env-file-content: ${{ secrets.DEV_ENV_FILE }}
 ```
 
 > El build ocurre en CI con caché `type=gha`: el primer build es lento, los siguientes solo rebuildan las capas que cambiaron (en general, solo el `COPY src/`). La instancia nunca buildea → no hay riesgo de que se detenga por uso de recursos.
@@ -319,11 +318,10 @@ on:
 
 jobs:
   deploy:
-    environment: staging
-    uses: thorque-software/thorque-actions/.github/workflows/docker-ssh-deploy.yml@main
+    uses: Thorque-Software/actions/.github/workflows/docker-ssh-deploy.yml@main
     with:
       image-name: thorque-back
-      server-host: ${{ vars.SERVER_IP }}
+      server-host: ${{ vars.STAGING_HOST }}
       deploy-path: /home/ubuntu/staging/back
       compose-file: docker-compose.staging.yml
       service-name: back
@@ -331,8 +329,8 @@ jobs:
       migration-command: npm run db:prod:migrate
       healthcheck-endpoint: api/v1/health
     secrets:
-      ssh-private-key: ${{ secrets.SSH_KEY }}
-      env-file-content: ${{ secrets.ENV_FILE }}
+      ssh-private-key: ${{ secrets.STAGING_SSH_KEY }}
+      env-file-content: ${{ secrets.STAGING_ENV_FILE }}
 ```
 
 ### Frontend — `deploy-staging.yml` (estrategia: Docker image via SSH)
@@ -347,19 +345,18 @@ on:
 
 jobs:
   deploy:
-    environment: staging
-    uses: thorque-software/thorque-actions/.github/workflows/docker-ssh-deploy.yml@main
+    uses: Thorque-Software/actions/.github/workflows/docker-ssh-deploy.yml@main
     with:
       image-name: thorque-front
-      server-host: ${{ vars.SERVER_IP }}
+      server-host: ${{ vars.STAGING_HOST }}
       deploy-path: /home/ubuntu/staging/front
       compose-file: docker-compose.staging.yml
       service-name: front
       run-migrations: false
       healthcheck-endpoint: api/health
     secrets:
-      ssh-private-key: ${{ secrets.SSH_KEY }}
-      env-file-content: ${{ secrets.ENV_FILE }}
+      ssh-private-key: ${{ secrets.STAGING_SSH_KEY }}
+      env-file-content: ${{ secrets.STAGING_ENV_FILE }}
 ```
 
 > El build ocurre en el runner de CI (no consume CPU de la t3.small). La imagen se envía como `.tar` por SCP. Sin necesidad de configurar ECR ni credenciales AWS para staging.
@@ -375,13 +372,21 @@ on:
     branches: [main]
 
 jobs:
-  deploy:
+  # Job gate: GitHub Actions no permite environment: en jobs con uses:
+  # Se usa un job previo para bloquear con aprobación manual.
+  gate:
+    runs-on: ubuntu-latest
     environment: production
-    uses: thorque-software/thorque-actions/.github/workflows/ecr-deploy.yml@main
+    steps:
+      - run: echo "Deployment to production approved"
+
+  deploy:
+    needs: gate
+    uses: Thorque-Software/actions/.github/workflows/ecr-deploy.yml@main
     with:
       AWS_REGION: us-east-1
       ECR_REPOSITORY: thorque-back
-      EC2_HOST: ${{ vars.SERVER_IP }}
+      EC2_HOST: ${{ vars.PROD_HOST }}
       DEPLOY_PATH: /home/ubuntu/prod/back
       COMPOSE_FILE: docker-compose.prod.yml
       service-name: back
@@ -389,42 +394,43 @@ jobs:
       migration-command: npm run db:prod:migrate
       healthcheck-endpoint: api/v1/health
     secrets:
-      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      EC2_SSH_PRIVATE_KEY: ${{ secrets.SSH_KEY }}
-      ENV_FILE_CONTENT: ${{ secrets.ENV_FILE }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.PROD_AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.PROD_AWS_SECRET_ACCESS_KEY }}
+      EC2_SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_KEY }}
+      ENV_FILE_CONTENT: ${{ secrets.PROD_ENV_FILE }}
 ```
 
-> Build incremental con caché en ECR: el servidor solo hace `docker pull`. Historial de imágenes por SHA para rollback manual. El `environment: production` bloquea el deploy hasta que un aprobador lo confirme en GitHub.
+> Build incremental con caché en ECR: el servidor solo hace `docker pull`. Historial de imágenes por SHA para rollback manual. El job `gate` bloquea el workflow hasta que un aprobador lo confirme en GitHub; recién entonces corre el deploy.
 
 ---
 
-## 6. GitHub Environments y Secrets
+## 6. Secrets y Variables en GitHub
 
-Cada repo tiene tres environments configurados en **Settings → Environments**:
+GitHub Actions **no permite usar `environment:` en jobs que llaman a un workflow reutilizable (`uses:`)**. Por eso los secrets se nombran con prefijo de entorno a nivel de repositorio.
 
-| Environment | Rama permitida | Aprobación manual |
-|-------------|---------------|-------------------|
-| `development` | `dev` | No |
-| `staging` | `staging` | No |
-| `production` | `main` | Sí (1 reviewer) |
+Para prod, la aprobación manual se implementa con un job `gate` separado que sí puede usar `environment:`.
 
-Cada environment tiene sus propios secrets y variables con **el mismo nombre** — GitHub inyecta los correctos según el `environment:` declarado en el workflow.
+### Variables de repositorio (Settings → Variables)
+| Variable | Descripción |
+|----------|-------------|
+| `DEV_HOST` | IP del servidor dev |
+| `STAGING_HOST` | IP del servidor staging |
+| `PROD_HOST` | IP del servidor prod |
 
-### Variables (no sensibles)
-| Variable | Valor en cada environment |
-|----------|--------------------------|
-| `SERVER_IP` | IP del servidor correspondiente |
-
-### Secrets (sensibles)
+### Secrets de repositorio (Settings → Secrets)
 | Secret | Descripción |
 |--------|-------------|
-| `SSH_KEY` | Clave privada SSH del servidor del environment |
-| `ENV_FILE` | Contenido completo del `.env` del environment |
-| `AWS_ACCESS_KEY_ID` | Solo en `production` (para ECR) |
-| `AWS_SECRET_ACCESS_KEY` | Solo en `production` (para ECR) |
+| `DEV_SSH_KEY` | Clave privada SSH — EC2 dev |
+| `DEV_ENV_FILE` | Contenido del `.env` — dev |
+| `STAGING_SSH_KEY` | Clave privada SSH — EC2 staging |
+| `STAGING_ENV_FILE` | Contenido del `.env` — staging |
+| `PROD_SSH_KEY` | Clave privada SSH — EC2 prod |
+| `PROD_ENV_FILE` | Contenido del `.env` — prod |
+| `PROD_AWS_ACCESS_KEY_ID` | AWS key para ECR — solo prod |
+| `PROD_AWS_SECRET_ACCESS_KEY` | AWS secret para ECR — solo prod |
 
-> Los workflows siempre referencian `secrets.SSH_KEY` y `secrets.ENV_FILE` — nunca `DEV_SSH_KEY` ni `STAGING_ENV`. GitHub resuelve cuál usar según el environment activo.
+### GitHub Environment (solo para aprobación manual en prod)
+Crear un environment `production` en **Settings → Environments** con un reviewer requerido. El job `gate` del workflow de prod lo referencia para bloquear el deploy hasta que sea aprobado.
 
 ---
 
