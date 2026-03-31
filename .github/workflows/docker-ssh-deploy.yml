@@ -204,7 +204,6 @@ jobs:
         env:
           IMAGE_NAME: ${{ inputs.image-name }}
           IMAGE_TAG: ${{ inputs.image-tag }}
-          COMPOSE_FILE: ${{ inputs.compose-file }}
           DEPLOY_PATH: ${{ inputs.deploy-path }}
           SERVICE_NAME: ${{ inputs.service-name }}
           RUN_MIGRATIONS: ${{ inputs.run-migrations }}
@@ -219,7 +218,7 @@ jobs:
           host: ${{ inputs.server-host }}
           username: ${{ inputs.server-user }}
           key: ${{ secrets.ssh-private-key }}
-          envs: IMAGE_NAME,IMAGE_TAG,COMPOSE_FILE,DEPLOY_PATH,SERVICE_NAME,RUN_MIGRATIONS,MIGRATION_CMD,RUN_SEEDERS,SEEDER_CMD,PRE_DEPLOY_SCRIPT,POST_DEPLOY_SCRIPT,PRUNE_IMAGES,ENV_FILE_CONTENT
+          envs: IMAGE_NAME,IMAGE_TAG,DEPLOY_PATH,SERVICE_NAME,RUN_MIGRATIONS,MIGRATION_CMD,RUN_SEEDERS,SEEDER_CMD,PRE_DEPLOY_SCRIPT,POST_DEPLOY_SCRIPT,PRUNE_IMAGES,ENV_FILE_CONTENT
           script: |
             cd $DEPLOY_PATH
 
@@ -232,7 +231,7 @@ jobs:
             echo "$ENV_FILE_CONTENT" > .env
 
             # Bajar contenedores actuales
-            docker compose -f $COMPOSE_FILE down
+            docker compose down
 
             # Script pre-deploy
             if [ -n "$PRE_DEPLOY_SCRIPT" ]; then
@@ -243,17 +242,17 @@ jobs:
             # Migraciones
             if [ "$RUN_MIGRATIONS" = "true" ]; then
               echo "▶️ Ejecutando migraciones..."
-              docker compose -f $COMPOSE_FILE run --rm $SERVICE_NAME $MIGRATION_CMD
+              docker compose run --rm $SERVICE_NAME $MIGRATION_CMD
             fi
 
             # Seeders
             if [ "$RUN_SEEDERS" = "true" ]; then
               echo "▶️ Ejecutando seeders..."
-              docker compose -f $COMPOSE_FILE run --rm $SERVICE_NAME $SEEDER_CMD
+              docker compose run --rm $SERVICE_NAME $SEEDER_CMD
             fi
 
             # Levantar contenedores con la nueva imagen
-            docker compose -f $COMPOSE_FILE up -d --remove-orphans
+            docker compose up -d --remove-orphans
 
             # Script post-deploy
             if [ -n "$POST_DEPLOY_SCRIPT" ]; then
