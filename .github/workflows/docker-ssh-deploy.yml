@@ -197,6 +197,7 @@ jobs:
           key: ${{ secrets.ssh-private-key }}
           source: "image.tar"
           target: ${{ inputs.deploy-path }}
+          strip_components: 0
           overwrite: true
 
       - name: Desplegar en servidor vía SSH
@@ -222,10 +223,19 @@ jobs:
           script: |
             cd $DEPLOY_PATH
 
+            # Verificar que image.tar llegó correctamente
+            if [ ! -f image.tar ]; then
+              echo "❌ image.tar no encontrado en $DEPLOY_PATH"
+              ls -la
+              exit 1
+            fi
+            echo "✅ image.tar encontrado: $(du -sh image.tar | cut -f1)"
+
             # Cargar imagen desde .tar
             echo "▶️ Cargando imagen Docker desde image.tar..."
             docker load -i image.tar
             rm -f image.tar
+            echo "✅ Imagen cargada: $(docker images $IMAGE_NAME --format '{{.Repository}}:{{.Tag}} ({{.Size}})')"
 
             # Archivo .env
             echo "$ENV_FILE_CONTENT" > .env
