@@ -160,6 +160,9 @@ jobs:
           chmod 644 image.tar
           echo "Imagen exportada: $(du -sh image.tar | cut -f1)"
 
+      - name: Rename docker-compose.yml
+        run: mv ${{ inputs.compose-file }} docker-compose.yml
+
       - name: Transferir docker-compose al servidor
         uses: appleboy/scp-action@v0.1.7
         with:

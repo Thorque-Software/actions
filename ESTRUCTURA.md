@@ -12,7 +12,7 @@ Tres entornos:
 
 | Entorno | Backend | Frontend | Trigger | Estrategia de deploy |
 |---------|---------|----------|---------|----------------------|
-| **dev** | EC2 pequeña (t3.micro) | — | push a `dev` | **rsync** — máxima velocidad, sin overhead de Docker |
+| **dev** | EC2 pequeña (t3.micro) | — | push a `dev` | **Docker image via SSH + GHA cache** — build en CI, la instancia solo hace `docker load`, sin riesgo de saturar recursos |
 | **staging** | EC2 mediana (t3.small) | EC2 mediana (t3.small) | push a `staging` | **Docker image via SSH** — build en CI, sin registry externo |
 | **prod** | EC2/ECS (según escala) | EC2/Vercel | PR merged a `main` con aprobación manual | **ECR Deploy** — build incremental con caché, historial de imágenes, rollback |
 
@@ -276,7 +276,7 @@ Misma estructura que staging pero con réplicas, límites de memoria y logging a
 
 ## 5. GitHub Actions Workflows
 
-### Backend — `deploy-dev.yml` (estrategia: rsync)
+### Backend — `deploy-dev.yml` (estrategia: Docker image via SSH + GHA cache)
 
 ```yaml
 # thorque-backend/.github/workflows/deploy-dev.yml
@@ -288,22 +288,24 @@ on:
 
 jobs:
   deploy:
-    uses: thorque-software/thorque-actions/.github/workflows/rsync.yml@main
+    environment: development
+    uses: thorque-software/thorque-actions/.github/workflows/docker-ssh-deploy.yml@main
     with:
-      host: ${{ vars.DEV_SERVER_IP }}
-      user: ubuntu
+      image-name: thorque-back
+      server-host: ${{ vars.SERVER_IP }}
       deploy-path: /home/ubuntu/thorque-back
-      files: "src/ migrations/ seeders/ index.ts app.ts drizzle.config.prod.ts package.json tsconfig.json Dockerfile.dev docker-compose.dev.yml"
-      script: |
-        docker compose -f docker-compose.dev.yml down
-        docker compose -f docker-compose.dev.yml up -d --build
-        docker compose -f docker-compose.dev.yml run back npm run db:migrate
+      compose-file: docker-compose.dev.yml
+      extra-files: "nginx/"
+      service-name: back
+      run-migrations: true
+      migration-command: npm run db:migrate
+      healthcheck-endpoint: api/v1/health
     secrets:
-      key: ${{ secrets.DEV_SSH_KEY }}
-      env-file-content: ${{ secrets.DEV_ENV }}
+      ssh-private-key: ${{ secrets.SSH_KEY }}
+      env-file-content: ${{ secrets.ENV_FILE }}
 ```
 
-> rsync transfiere solo los archivos modificados → deploys en segundos. El build del Dockerfile.dev ocurre en el servidor, pero en dev eso es aceptable dado que la instancia es desechable y la velocidad de CI importa más que el consumo de CPU.
+> El build ocurre en CI con caché `type=gha`: el primer build es lento, los siguientes solo rebuildan las capas que cambiaron (en general, solo el `COPY src/`). La instancia nunca buildea → no hay riesgo de que se detenga por uso de recursos.
 
 ### Backend — `deploy-staging.yml` (estrategia: Docker image via SSH)
 
@@ -317,10 +319,11 @@ on:
 
 jobs:
   deploy:
+    environment: staging
     uses: thorque-software/thorque-actions/.github/workflows/docker-ssh-deploy.yml@main
     with:
       image-name: thorque-back
-      server-host: ${{ vars.STAGING_SERVER_IP }}
+      server-host: ${{ vars.SERVER_IP }}
       deploy-path: /home/ubuntu/staging/back
       compose-file: docker-compose.staging.yml
       service-name: back
@@ -328,8 +331,8 @@ jobs:
       migration-command: npm run db:prod:migrate
       healthcheck-endpoint: api/v1/health
     secrets:
-      ssh-private-key: ${{ secrets.STAGING_SSH_KEY }}
-      env-file-content: ${{ secrets.STAGING_BACK_ENV }}
+      ssh-private-key: ${{ secrets.SSH_KEY }}
+      env-file-content: ${{ secrets.ENV_FILE }}
 ```
 
 ### Frontend — `deploy-staging.yml` (estrategia: Docker image via SSH)
@@ -344,18 +347,19 @@ on:
 
 jobs:
   deploy:
+    environment: staging
     uses: thorque-software/thorque-actions/.github/workflows/docker-ssh-deploy.yml@main
     with:
       image-name: thorque-front
-      server-host: ${{ vars.STAGING_SERVER_IP }}
+      server-host: ${{ vars.SERVER_IP }}
       deploy-path: /home/ubuntu/staging/front
       compose-file: docker-compose.staging.yml
       service-name: front
       run-migrations: false
       healthcheck-endpoint: api/health
     secrets:
-      ssh-private-key: ${{ secrets.STAGING_SSH_KEY }}
-      env-file-content: ${{ secrets.STAGING_FRONT_ENV }}
+      ssh-private-key: ${{ secrets.SSH_KEY }}
+      env-file-content: ${{ secrets.ENV_FILE }}
 ```
 
 > El build ocurre en el runner de CI (no consume CPU de la t3.small). La imagen se envía como `.tar` por SCP. Sin necesidad de configurar ECR ni credenciales AWS para staging.
@@ -372,12 +376,12 @@ on:
 
 jobs:
   deploy:
-    environment: production          # ← requiere aprobación en GitHub Environments
+    environment: production
     uses: thorque-software/thorque-actions/.github/workflows/ecr-deploy.yml@main
     with:
       AWS_REGION: us-east-1
       ECR_REPOSITORY: thorque-back
-      EC2_HOST: ${{ vars.PROD_SERVER_IP }}
+      EC2_HOST: ${{ vars.SERVER_IP }}
       DEPLOY_PATH: /home/ubuntu/prod/back
       COMPOSE_FILE: docker-compose.prod.yml
       service-name: back
@@ -385,38 +389,42 @@ jobs:
       migration-command: npm run db:prod:migrate
       healthcheck-endpoint: api/v1/health
     secrets:
-      AWS_ACCESS_KEY_ID: ${{ secrets.PROD_AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.PROD_AWS_SECRET_ACCESS_KEY }}
-      EC2_SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_KEY }}
-      ENV_FILE_CONTENT: ${{ secrets.PROD_BACK_ENV }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      EC2_SSH_PRIVATE_KEY: ${{ secrets.SSH_KEY }}
+      ENV_FILE_CONTENT: ${{ secrets.ENV_FILE }}
 ```
 
 > Build incremental con caché en ECR: el servidor solo hace `docker pull`. Historial de imágenes por SHA para rollback manual. El `environment: production` bloquea el deploy hasta que un aprobador lo confirme en GitHub.
 
 ---
 
-## 6. Secrets y Variables en GitHub
+## 6. GitHub Environments y Secrets
 
-Configurar en cada repo bajo **Settings → Secrets and variables → Actions**:
+Cada repo tiene tres environments configurados en **Settings → Environments**:
 
-### Variables (no sensibles, visibles en logs)
-| Variable | Dev | Staging | Prod |
-|----------|-----|---------|------|
-| `DEV_SERVER_IP` | IP del servidor dev | — | — |
-| `STAGING_SERVER_IP` | — | IP del servidor staging | — |
-| `PROD_SERVER_IP` | — | — | IP del servidor prod |
+| Environment | Rama permitida | Aprobación manual |
+|-------------|---------------|-------------------|
+| `development` | `dev` | No |
+| `staging` | `staging` | No |
+| `production` | `main` | Sí (1 reviewer) |
+
+Cada environment tiene sus propios secrets y variables con **el mismo nombre** — GitHub inyecta los correctos según el `environment:` declarado en el workflow.
+
+### Variables (no sensibles)
+| Variable | Valor en cada environment |
+|----------|--------------------------|
+| `SERVER_IP` | IP del servidor correspondiente |
 
 ### Secrets (sensibles)
 | Secret | Descripción |
 |--------|-------------|
-| `DEV_SSH_KEY` | Clave privada EC2 dev |
-| `STAGING_SSH_KEY` | Clave privada EC2 staging |
-| `PROD_SSH_KEY` | Clave privada EC2 prod |
-| `DEV_ENV` | Contenido completo del `.env` de dev |
-| `STAGING_BACK_ENV` | `.env` del backend en staging |
-| `STAGING_FRONT_ENV` | `.env` del frontend en staging |
-| `PROD_BACK_ENV` | `.env` del backend en prod |
-| `PROD_FRONT_ENV` | `.env` del frontend en prod |
+| `SSH_KEY` | Clave privada SSH del servidor del environment |
+| `ENV_FILE` | Contenido completo del `.env` del environment |
+| `AWS_ACCESS_KEY_ID` | Solo en `production` (para ECR) |
+| `AWS_SECRET_ACCESS_KEY` | Solo en `production` (para ECR) |
+
+> Los workflows siempre referencian `secrets.SSH_KEY` y `secrets.ENV_FILE` — nunca `DEV_SSH_KEY` ni `STAGING_ENV`. GitHub resuelve cuál usar según el environment activo.
 
 ---
 
@@ -552,6 +560,9 @@ server {
 - [ ] Levantar EC2 staging y configurar secrets en ambos repos
 - [ ] Subir `docker-compose.staging.yml` y `nginx/staging.conf` al servidor staging
 - [ ] Configurar DNS para los subdominios de staging
-- [ ] Habilitar **GitHub Environments** con aprobación manual para `production`
+- [ ] Crear GitHub Environments `development`, `staging`, `production` en cada repo
+- [ ] Configurar aprobación manual en `production` (Settings → Environments → Required reviewers)
+- [ ] Restringir cada environment a su rama correspondiente (deployment branches)
+- [ ] Cargar `SERVER_IP`, `SSH_KEY` y `ENV_FILE` en cada environment (mismo nombre, distinto valor)
 - [ ] Ejecutar scripts de AWS para crear usuarios IAM, claves y CloudWatch
 - [ ] Hacer primer push de prueba a `dev` y verificar que el CI despliega correctamente
