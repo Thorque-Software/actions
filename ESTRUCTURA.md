@@ -566,9 +566,8 @@ server {
 - [ ] Levantar EC2 staging y configurar secrets en ambos repos
 - [ ] Subir `docker-compose.staging.yml` y `nginx/staging.conf` al servidor staging
 - [ ] Configurar DNS para los subdominios de staging
-- [ ] Crear GitHub Environments `development`, `staging`, `production` en cada repo
-- [ ] Configurar aprobación manual en `production` (Settings → Environments → Required reviewers)
-- [ ] Restringir cada environment a su rama correspondiente (deployment branches)
-- [ ] Cargar `SERVER_IP`, `SSH_KEY` y `ENV_FILE` en cada environment (mismo nombre, distinto valor)
+- [ ] Cargar variables `DEV_HOST`, `STAGING_HOST`, `PROD_HOST` en cada repo
+- [ ] Cargar secrets con prefijo de entorno (`DEV_SSH_KEY`, `STAGING_SSH_KEY`, etc.) en cada repo
+- [ ] Crear GitHub Environment `production` en cada repo (Settings → Environments) con aprobación manual
 - [ ] Ejecutar scripts de AWS para crear usuarios IAM, claves y CloudWatch
 - [ ] Hacer primer push de prueba a `dev` y verificar que el CI despliega correctamente

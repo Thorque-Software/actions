@@ -161,8 +161,10 @@ jobs:
           echo "Imagen exportada: $(du -sh image.tar | cut -f1)"
 
       - name: Rename docker-compose.yml
-        # -n es para que no tire error si el archivo se llama igual
-        run: mv -n ${{ inputs.compose-file }} docker-compose.yml
+        run: |
+          if [ "${{ inputs.compose-file }}" != "docker-compose.yml" ]; then
+            mv ${{ inputs.compose-file }} docker-compose.yml
+          fi
 
       - name: Transferir docker-compose al servidor
         uses: appleboy/scp-action@v0.1.7
@@ -170,7 +172,7 @@ jobs:
           host: ${{ inputs.server-host }}
           username: ${{ inputs.server-user }}
           key: ${{ secrets.ssh-private-key }}
-          source: "${{ inputs.compose-file }}"
+          source: docker-compose.yml
           target: ${{ inputs.deploy-path }}
           strip_components: 0
           overwrite: true
