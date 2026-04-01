@@ -137,22 +137,21 @@ jobs:
       - name: Checkout código
         uses: actions/checkout@v4
 
-      - name: Configurar Docker Buildx
-        uses: docker/setup-buildx-action@v3
-        with:
-          driver: docker-container
-          buildkitd-flags: --allow-insecure-entitlement network.host
+      # - name: Configurar Docker Buildx
+      #   uses: docker/setup-buildx-action@v3
+      #   with:
+      #     driver: docker-container
+      #     buildkitd-flags: --allow-insecure-entitlement network.host
 
-      - name: Construir imagen Docker
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ inputs.build-context }}
-          file: ${{ inputs.dockerfile }}
-          push: false
-          load: true
-          tags: ${{ inputs.image-name }}:${{ inputs.image-tag }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      # - name: Construir imagen Docker
+      #   uses: docker/build-push-action@v6
+      #   with:
+      #     context: ${{ inputs.build-context }}
+      #     file: ${{ inputs.dockerfile }}
+      #     push: false
+      #     load: true
+      #     tags: ${{ inputs.image-name }}:${{ inputs.image-tag }}
+      #     no-cache: true
 
       - name: Exportar imagen como .tar
         run: |
@@ -166,36 +165,26 @@ jobs:
             mv ${{ inputs.compose-file }} docker-compose.yml
           fi
 
-      - name: Transferir docker-compose al servidor
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ inputs.server-host }}
-          username: ${{ inputs.server-user }}
-          key: ${{ secrets.ssh-private-key }}
-          source: docker-compose.yml
-          target: ${{ inputs.deploy-path }}
-          strip_components: 0
-          overwrite: true
-
-      - name: Transferir archivos adicionales al servidor
+      - name: Transferir archivos al servidor (con extra files)
         if: inputs.extra-files != ''
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ inputs.server-host }}
           username: ${{ inputs.server-user }}
           key: ${{ secrets.ssh-private-key }}
-          source: "${{ inputs.extra-files }}"
+          source: "docker-compose.yml,image.tar,${{ inputs.extra-files }}"
           target: ${{ inputs.deploy-path }}
           strip_components: 0
           overwrite: true
 
-      - name: Transferir imagen .tar al servidor
+      - name: Transferir archivos al servidor
+        if: inputs.extra-files == ''
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ inputs.server-host }}
           username: ${{ inputs.server-user }}
           key: ${{ secrets.ssh-private-key }}
-          source: "image.tar"
+          source: "docker-compose.yml,image.tar"
           target: ${{ inputs.deploy-path }}
           strip_components: 0
           overwrite: true
