@@ -212,6 +212,16 @@ jobs:
             fi
             echo "✅ image.tar encontrado: $(du -sh image.tar | cut -f1)"
 
+            # Bajar contenedores actuales
+            docker compose down
+
+            # Borrar imagen para liberar espacio
+            docker rmi hopeslab
+
+            # Limpiar imágenes antiguas antes de cargar la nueva
+            echo "🧹 Limpiando imágenes Docker antiguas..."
+            docker image prune -af
+
             # Cargar imagen desde .tar
             echo "▶️ Cargando imagen Docker desde image.tar..."
             docker load -i image.tar
@@ -220,9 +230,6 @@ jobs:
 
             # Archivo .env
             echo "$ENV_FILE_CONTENT" > .env
-
-            # Bajar contenedores actuales
-            docker compose down
 
             # Script pre-deploy
             if [ -n "$PRE_DEPLOY_SCRIPT" ]; then
