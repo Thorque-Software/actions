@@ -15,6 +15,11 @@ inputs:
     required: false
     default: 'latest'
     type: string
+  build_args:
+      description: 'Build arguments for docker build (comma separated, e.g. KEY1=value1,KEY2=value2)'
+      required: false
+      default: ''
+      type: string
   secrets:
     aws_access_key_id:
       required: true
