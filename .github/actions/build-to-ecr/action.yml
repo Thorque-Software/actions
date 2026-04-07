@@ -1,16 +1,16 @@
 name: Build and push to ECR
 description: 'Build and push to a ECR repository'
 inputs:
-  ecr_repository:
+  ecr-repository:
     description: 'ECR repository name'
     required: true
     type: string
-  image_tag:
+  image-tag:
     description: 'Docker image tag'
     required: false
     default: 'latest'
     type: string
-  build_args:
+  build-args:
       description: 'Build arguments for docker build (comma separated, e.g. KEY1=value1,KEY2=value2)'
       required: false
       default: ''
@@ -48,13 +48,13 @@ runs:
       shell: bash   # ← Obligatorio
       env:
         ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        ECR_REPOSITORY: ${{ inputs.ecr_repository }}
-        IMAGE_TAG: ${{ inputs.image_tag }}
+        ECR_REPOSITORY: ${{ inputs.ecr-repository }}
+        IMAGE_TAG: ${{ inputs.image-tag }}
       run: |
         # Parse build args if provided
         BUILD_ARGS=""
-        if [ -n "${{ inputs.build_args }}" ]; then
-          IFS=',' read -ra ARGS <<< "${{ inputs.build_args }}"
+        if [ -n "${{ inputs.build-args }}" ]; then
+          IFS=',' read -ra ARGS <<< "${{ inputs.build-args }}"
           for arg in "${ARGS[@]}"; do
             BUILD_ARGS="$BUILD_ARGS --build-arg $arg"
           done
