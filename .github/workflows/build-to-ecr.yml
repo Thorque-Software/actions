@@ -37,7 +37,8 @@ on:
         type: string
       server_user:
         description: 'SSH user'
-        required: true
+        required: false
+        default: 'ubuntu'
         type: string
       build_args:
         description: 'Build arguments for docker build (comma separated, e.g. KEY1=value1,KEY2=value2)'
