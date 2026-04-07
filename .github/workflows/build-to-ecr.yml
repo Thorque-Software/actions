@@ -1,0 +1,138 @@
+name: Reusable Deploy Next.js to Server
+
+on:
+  workflow_call:
+    inputs:
+      node_version:
+        description: 'Node.js version'
+        required: false
+        default: '23.9.0'
+        type: string
+      next_build_output:
+        description: 'Next.js output mode'
+        required: false
+        default: 'standalone'
+        type: string
+      deploy_path:
+        description: 'Folder of the project'
+        required: true
+        type: string
+      aws_region:
+        description: 'AWS region for ECR'
+        required: false
+        default: 'sa-east-1'
+        type: string
+      ecr_repository:
+        description: 'ECR repository name'
+        required: true
+        type: string
+      image_tag:
+        description: 'Docker image tag'
+        required: false
+        default: 'latest'
+        type: string
+      server_host:
+        description: 'Server hostname or IP'
+        required: true
+        type: string
+      server_user:
+        description: 'SSH user'
+        required: true
+        type: string
+      build_args:
+        description: 'Build arguments for docker build (comma separated, e.g. KEY1=value1,KEY2=value2)'
+        required: false
+        default: ''
+        type: string
+      compose_file:
+        description: 'Docker compose file name'
+        required: false
+        default: 'docker-compose.prod.yml'
+        type: string
+      service_name:
+        description: 'Service name inside compose file to restart'
+        required: true
+        type: string
+    secrets:
+      aws_access_key_id:
+        required: true
+      aws_secret_access_key:
+        required: true
+      ssh_private_key:
+        required: true
+
+env:
+  SSH_AUTH_SOCK: /tmp/ssh_agent.sock
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.aws_access_key_id }}
+          aws-secret-access-key: ${{ secrets.aws_secret_access_key }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push Docker image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ inputs.ecr_repository }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          # Parse build args if provided
+          BUILD_ARGS=""
+          if [ -n "${{ inputs.build_args }}" ]; then
+            IFS=',' read -ra ARGS <<< "${{ inputs.build_args }}"
+            for arg in "${ARGS[@]}"; do
+              BUILD_ARGS="$BUILD_ARGS --build-arg $arg"
+            done
+          fi
+          docker build $BUILD_ARGS \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+      - name: Setup SSH private key
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.ssh_private_key }}
+        run: |
+          ssh-agent -a $SSH_AUTH_SOCK > /dev/null
+          echo "$SSH_PRIVATE_KEY" | ssh-add - >/dev/null
+
+      - name: Deploy on remote server
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ inputs.ecr_repository }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          AWS_REGION: ${{ inputs.aws_region }}
+          SERVER_HOST: ${{ inputs.server_host }}
+          SERVER_USER: ${{ inputs.server_user }}
+          COMPOSE_FILE: ${{ inputs.compose_file }}
+          SERVICE_NAME: ${{ inputs.service_name }}
+          DEPLOY_PATH: ${{ inputs.deploy_path }}
+        run: |
+          ssh -o StrictHostKeyChecking=no $SERVER_USER@$SERVER_HOST << EOF
+            export ECR_REGISTRY="$ECR_REGISTRY"
+            export ECR_REPOSITORY="$ECR_REPOSITORY"
+            export AWS_REGION="$AWS_REGION"
+            export IMAGE_TAG="$IMAGE_TAG"
+            export DEPLOY_PATH="$DEPLOY_PATH"
+
+            cd \$DEPLOY_PATH
+            pwd
+
+            # Login to ECR from the server
+            aws ecr get-login-password --region \$AWS_REGION | docker login --username AWS --password-stdin \$ECR_REGISTRY
+
+            docker compose -f $COMPOSE_FILE stop $SERVICE_NAME
+            docker pull \$ECR_REGISTRY/\$ECR_REPOSITORY:\$IMAGE_TAG
+            docker compose -f $COMPOSE_FILE up -d $SERVICE_NAME
+          EOF
