@@ -37,7 +37,7 @@ runs:
       uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-access-key-id: ${{ inputs.aws_access_key_id }}
-        aws-secret-access-key: ${{ secrets.aws_secret_access_key }}
+        aws-secret-access-key: ${{ inputs.aws_secret_access_key }}
         aws-region: ${{ inputs.aws_region }}
 
     - name: Login to Amazon ECR
